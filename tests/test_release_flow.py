@@ -58,6 +58,39 @@ def _make(app, engine_result=""):
     return ov, controller
 
 
+def test_successful_dictation_ends_with_done_state(app, monkeypatch, tmp_path):
+    # 完整成功链路：不得抛"处理失败"，且界面最终停在"✓ 已上屏"
+    # （回归：PyQt6 emit() 不接受关键字参数，曾让收尾线程在 DONE 处崩溃）
+    import app.history as history_mod
+    import main as main_mod
+
+    monkeypatch.setattr(history_mod, "HISTORY_PATH", tmp_path / "history.jsonl")
+    injected = []
+    monkeypatch.setattr(main_mod, "inject_text", lambda text: injected.append(text))
+    toasts = []
+
+    ov = Overlay()
+    ov.show()
+    controller = Controller(load_config(), ov)
+    controller._sig_toast.connect(toasts.append)
+    recorder, engine = _StubRecorder(), _StubEngine(result="你好世界这是测试语音")
+    controller._state = "recording"
+    controller._session = _session(recorder, engine)
+
+    controller._release("simple")
+
+    deadline = time.time() + 2
+    while (controller._state != "idle" or ov._state is OverlayState.PROCESSING) and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    app.processEvents()
+
+    assert injected == ["你好世界这是测试语音"]
+    assert toasts == []  # 不应有任何"处理失败/识别失败"提示
+    assert ov._state is OverlayState.DONE
+    ov.hide()
+
+
 def _session(recorder, engine, started_ago=2.0):
     return {
         "mode": "simple",

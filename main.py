@@ -215,7 +215,8 @@ class Controller(QObject):
 
             add_record(mode, raw, final, int((time.monotonic() - session["start"]) * 1000))
             self._sig_partial.emit(final)
-            self._sig_state.emit(OverlayState.DONE, MODE_NAMES[mode], auto_idle_ms=1600)
+            # PyQt6 的 emit() 不接受关键字参数，只能按位置传 auto_idle_ms
+            self._sig_state.emit(OverlayState.DONE, MODE_NAMES[mode], 1600)
         except Exception as exc:  # noqa: BLE001 兜底：任何异常都不能让状态卡在 finalizing
             self._sig_toast.emit(f"处理失败：{exc}")
         finally:
