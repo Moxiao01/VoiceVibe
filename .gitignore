@@ -1,0 +1,8 @@
+# 本地生成的文件
+config.toml
+config.example - 副本.toml
+history.jsonl
+__pycache__/
+*.pyc
+.pytest_cache/
+smoke_output.log
