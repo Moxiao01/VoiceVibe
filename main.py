@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -21,7 +22,7 @@ from app.asr.dashscope_rt import DashScopeRealtimeAsr
 from app.config import Config, load_config
 from app.history import add_record
 from app.hotkey import HotkeyManager
-from app.inject import inject_text
+from app.inject import LiveInjector, inject_text
 from app.polish.deep import coherence_polish, promptify
 from app.polish.llm import LlmError
 from app.polish.simple import simple_polish
@@ -109,6 +110,18 @@ class Controller(QObject):
     def _start_worker(self, mode: str) -> None:
         engine = recorder = None
         error = None
+        # 流式上屏：深度润色要等 LLM 整体重写，只保留悬浮条展示
+        live = None
+        if self.cfg.input.streaming and mode in ("simple", "raw"):
+            live = LiveInjector()
+            live.begin()
+        session: dict = {
+            "mode": mode, "engine": None, "recorder": None, "start": 0.0,
+            "injector": live, "q": queue.Queue(), "pump": None, "stream_error": "",
+        }
+        pump = threading.Thread(target=self._pump_injector, args=(session,), daemon=True)
+        session["pump"] = pump
+        pump.start()
         try:
             engine = DashScopeRealtimeAsr(
                 api_key=self.cfg.asr.api_key,
@@ -116,7 +129,7 @@ class Controller(QObject):
                 sample_rate=self.cfg.audio.sample_rate,
                 base_url=self.cfg.asr.base_url,
                 callbacks=AsrCallbacks(
-                    on_partial=lambda t: self._sig_partial.emit(t),
+                    on_partial=lambda t: self._on_partial(session, mode, t),
                     on_error=lambda msg: self._sig_toast.emit(f"识别服务：{msg}"),
                 ),
             )
@@ -132,24 +145,52 @@ class Controller(QObject):
             if self._state != "starting":  # 已被取消
                 if recorder is not None:
                     recorder.stop()
+                self._abort_session(session)
                 return
             if error is not None:
                 self._state = "idle"
                 self._state_since = time.monotonic()
                 self._sig_toast.emit(f"启动失败：{error}")
+                self._abort_session(session)
                 return
             self._state = "recording"
             self._state_since = time.monotonic()
-            self._session = {
-                "mode": mode,
-                "engine": engine,
-                "recorder": recorder,
-                "start": time.monotonic(),
-            }
+            session["start"] = time.monotonic()
+            session["engine"] = engine
+            session["recorder"] = recorder
+            self._session = session
         self._sig_partial.emit("")
         self._sig_state.emit(OverlayState.RECORDING, MODE_NAMES[mode], 0)
         if self._pending_release:
             self._release(mode)
+
+    def _on_partial(self, session: dict, mode: str, text: str) -> None:
+        # 悬浮条与输入框展示同一份清理后文本，语气词删除天然同步
+        shown = simple_polish(text) if mode == "simple" else text
+        self._sig_partial.emit(shown)
+        if session.get("injector") is None or session.get("stream_error"):
+            return
+        q = session["q"]
+        try:  # 只保留最新一条，打字速度跟不上识别速度时自动合并
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        q.put_nowait(shown)
+
+    def _pump_injector(self, session: dict) -> None:
+        inj = session["injector"]
+        q = session["q"]
+        while True:
+            item = q.get()
+            if item is None:
+                return
+            if session.get("stream_error"):
+                continue
+            try:
+                inj.update(item)
+            except Exception as exc:  # noqa: BLE001
+                session["stream_error"] = str(exc)
+                self._sig_toast.emit(f"实时上屏中断，将在松开后整体写入：{exc}")
 
     def _release(self, mode: str) -> None:
         with self._lock:
@@ -207,11 +248,29 @@ class Controller(QObject):
             if note:
                 self._sig_toast.emit(note)
 
-            try:
-                inject_text(final)
-            except Exception as exc:  # noqa: BLE001
-                self._sig_toast.emit(f"注入失败（已复制到剪贴板）：{exc}")
-                return
+            if session.get("stream_error"):
+                try:  # 流式已中断：整段补写
+                    inject_text(final)
+                except Exception as exc:  # noqa: BLE001
+                    self._sig_toast.emit(f"注入失败（已复制到剪贴板）：{exc}")
+                    return
+            else:
+                inj = session.get("injector")
+                if inj is None:  # 深度润色：等 LLM 重写完一次性上屏
+                    try:
+                        inject_text(final)
+                    except Exception as exc:  # noqa: BLE001
+                        self._sig_toast.emit(f"注入失败（已复制到剪贴板）：{exc}")
+                        return
+                else:
+                    session["q"].put(None)  # 停流式线程，避免并发打字
+                    session["pump"].join(timeout=2.0)
+                    try:  # 润色删掉的语气词在这里通过退格+补粘同步到输入框
+                        inj.update(final)
+                    except Exception as exc:  # noqa: BLE001
+                        self._sig_toast.emit(f"注入失败（已复制到剪贴板）：{exc}")
+                        return
+                    inj.end()
 
             add_record(mode, raw, final, int((time.monotonic() - session["start"]) * 1000))
             self._sig_partial.emit(final)
@@ -283,6 +342,22 @@ class Controller(QObject):
             session["engine"].abort()
         except Exception:
             pass
+        if session.get("q") is None:
+            return
+
+        def _stop_stream_and_undo() -> None:
+            try:
+                session["q"].put(None)  # 停掉流式上屏线程
+                pump = session.get("pump")
+                if pump is not None:
+                    pump.join(timeout=1.0)
+                inj = session.get("injector")
+                if inj is not None:
+                    inj.cancel()  # 退格撤销已打入的文字并恢复剪贴板
+            except Exception:
+                pass
+
+        threading.Thread(target=_stop_stream_and_undo, daemon=True).start()
 
 
 def _make_recorder(cfg: Config, engine, sig_level, sig_toast):

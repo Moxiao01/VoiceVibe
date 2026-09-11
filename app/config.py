@@ -47,6 +47,11 @@ class PolishConfig:
 
 
 @dataclass
+class InputConfig:
+    streaming: bool = True  # 说话时把文字实时打进光标处并同步修正（深度润色不适用）
+
+
+@dataclass
 class UiConfig:
     x: int = -1  # -1 = 底部居中
     y: int = -1
@@ -59,6 +64,7 @@ class Config:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     polish: PolishConfig = field(default_factory=PolishConfig)
+    input: InputConfig = field(default_factory=InputConfig)
     ui: UiConfig = field(default_factory=UiConfig)
 
     @property
@@ -105,6 +111,7 @@ def load_config() -> Config:
         ("hotkey", HotkeyConfig),
         ("audio", AudioConfig),
         ("polish", PolishConfig),
+        ("input", InputConfig),
         ("ui", UiConfig),
     ):
         if isinstance(data.get(section), dict):
@@ -115,7 +122,7 @@ def load_config() -> Config:
 def save_config(cfg: Config) -> None:
     """把配置写回 config.toml（设置对话框用）。"""
     lines = []
-    for section in ("asr", "llm", "hotkey", "audio", "polish", "ui"):
+    for section in ("asr", "llm", "hotkey", "audio", "polish", "input", "ui"):
         lines.append(f"[{section}]")
         for key, value in asdict(getattr(cfg, section)).items():
             if isinstance(value, bool):
