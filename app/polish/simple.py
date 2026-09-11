@@ -2,10 +2,12 @@
 
 处理内容：
 - 删除语气词（嗯/呃/啊/哦…），整句、句首、独立成段都能处理
-- 折叠口吃重复（"那个那个那个" → "那个"），删除作为犹豫语的"那个，"
+- 删除分句开头的口头语（然后/就是/其实/就是说/反正/而且/怎么说呢…）
+- 折叠口吃重复（"那个那个那个" → "那个"），删除独占分句的犹豫语"那个/这个"
 - 英文填充词（um/uh/erm）
 - 清理冗余标点与空白，中文与英文/数字之间补空格
-策略保守：只删"确定是废话"的部分，避免误伤语义。
+策略取舍：句首口头语一律删，极少数列举语义的"然后"会被误删；
+"这个/那个"是常用指示词，只在独占分句时删，"那个方案"这类用法保留。
 """
 from __future__ import annotations
 
@@ -22,8 +24,18 @@ _STUTTER_WORDS = ("那个", "这个", "就是说", "然后", "就是", "所以",
 _STUTTER_REPEAT = re.compile(
     "^(" + "|".join(_STUTTER_WORDS) + r")(?:\1)+"
 )
-# 分句位置上单独作犹豫语的"那个，"（"帮我写个，那个，脚本"）
-_HESITATE_THAT = re.compile(r"^那个$")
+# 分句开头的口头语：独立出现也删（按长短排序，避免"就是"截胡"就是说"）。
+# "那么"后跟程度词时是"那么多/那么大"，要保留
+_DEGREE_AFTER_SO = "多大小高低好坏快慢久远近少长短深浅厚薄重轻"
+_OPEN_FILLER_RE = re.compile(
+    "^(?:怎么说呢|就是说呢|就是说|然后呢|然后吧|然后|其实呢|其实吧|其实|反正呢|反正"
+    rf"|而且|那么(?![{_DEGREE_AFTER_SO}])|就是)"
+)
+# 独占一个分句的口头语（"帮我写个，那个，脚本"），连同标点一起丢弃
+_STANDALONE_FILLERS = {
+    "那个", "这个", "就是", "就是呢", "就是说", "然后", "然后呢",
+    "其实", "其实呢", "反正", "那么", "而且", "对吧", "是吧",
+}
 # 英文填充词
 _EN_FILLER = re.compile(r"\b(?:um+|uh+|erm)\b[ \t]*", re.IGNORECASE)
 # 冗余标点
@@ -39,10 +51,15 @@ _SEGMENT_SPLIT = re.compile(r"([，。！？；、,.!?;：:\n])")
 
 def _clean_segment(segment: str) -> str:
     s = segment.strip()
-    # 句首语气词连用："嗯嗯，今天…" / "呃啊，那个脚本…"
-    s = _FILLER_RUN.sub("", s)
-    # 口吃折叠："那个那个那个帮我…" → "那个帮我…"
-    s = _STUTTER_REPEAT.sub(r"\1", s)
+    # 反复剥离句首废话，覆盖"然后就是其实…"这类连用
+    for _ in range(6):
+        before = s
+        s = _FILLER_RUN.sub("", s)
+        s = _STUTTER_REPEAT.sub(r"\1", s)
+        s = _OPEN_FILLER_RE.sub("", s, count=1)
+        if s == before:
+            break
+        s = s.lstrip()
     return s.strip()
 
 
@@ -61,8 +78,8 @@ def simple_polish(text: str) -> str:
             continue
         seg = _clean_segment(part)
         if not seg:
-            continue  # 语气词独占分句 → 连同它的标点一起丢弃
-        if _HESITATE_THAT.match(seg):
+            continue  # 语气词/口头语独占分句 → 连同它的标点一起丢弃
+        if seg in _STANDALONE_FILLERS:
             continue
         out.append(seg)
     text = "".join(out)
