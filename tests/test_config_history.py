@@ -30,6 +30,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     cfg.asr.api_key = "sk-test"
     cfg.llm.model = "glm-4-plus"
     cfg.hotkey.simple = "f9"
+    cfg.hotkey.mode = "toggle"
     cfg.audio.device = 3
     cfg.polish.simple_llm_coherence = True
     save_config(cfg)
@@ -38,6 +39,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     assert loaded.asr.api_key == "sk-test"
     assert loaded.llm.model == "glm-4-plus"
     assert loaded.hotkey.simple == "f9"
+    assert loaded.hotkey.mode == "toggle"
     assert loaded.audio.device == 3
     assert loaded.polish.simple_llm_coherence is True
 

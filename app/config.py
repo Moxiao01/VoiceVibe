@@ -46,6 +46,7 @@ class HotkeyConfig:
     deep: str = "f3"
     raw: str = "f4"
     cancel: str = "esc"
+    mode: str = "hold"  # hold = 按住说话松开结束；toggle = 按一下开始再按一下结束
 
 
 @dataclass

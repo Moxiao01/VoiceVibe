@@ -38,7 +38,7 @@ class _StopButton(QWidget):
         super().__init__(parent)
         self.setFixedSize(28, 28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("停止本次输入")
+        self.setToolTip("结束本次输入并保留文字（Esc 取消丢弃）")
         self._hover = False
 
     def enterEvent(self, _event) -> None:  # noqa: N802

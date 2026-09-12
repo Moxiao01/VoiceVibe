@@ -1,6 +1,6 @@
 # Voice Vibe 语音输入
 
-**按住热键说话 → 松开后自动润色 → 文字粘贴到当前光标处。**
+**按住热键说话 → 松开后自动润色 → 文字粘贴到当前光标处。**（触发方式可改为切换模式：按一下开始，再按一下结束，托盘「设置」里配置）
 
 Windows 桌面语音输入工具，参考 [OpenLess](https://github.com/Open-Less/openless)（Wispr Flow 开源替代）与 [蛐蛐 QuQu](https://github.com/yan5xu/ququ) 的产品思路，用 Python 实现。目标是在任何输入框里，让"说话"像打字一样可用——但快得多。
 
@@ -14,9 +14,9 @@ Windows 桌面语音输入工具，参考 [OpenLess](https://github.com/Open-Les
 | **Esc** | 取消 | 录音过程中取消本次输入 |
 
 - **流式实时上屏**：边说边出字并实时打进当前光标处（阿里云 DashScope 实时语音识别）；简单润色/原文模式下，语气词删除会同步修正到输入框，深度润色除外
-- **悬浮条**：显示状态、流式文字、音量波形，可拖动、不抢焦点；录音时右侧有 ⏸ 停止按钮，点击撤销已打入的文字并回到初始样式
+- **悬浮条**：显示状态、流式文字、音量波形，可拖动、不抢焦点；录音时右侧有 ⏸ 停止按钮，点击等同松开热键——正常结束并保留本次文字（Esc 才是取消，会撤销已打入的文字）
 - **历史记录**：每次输入落盘 `history.jsonl`，托盘菜单可查看
-- **降级容错**：深度润色失败自动降级为简单润色，流式中断自动回退为"松开后整段粘贴"
+- **降级容错**：深度润色失败自动降级为简单润色，流式中断自动回退为"松开后整段粘贴"；识别服务中断时等同松手——立即停麦、收尾并上屏中断前已识别的部分，不会出现"界面复位但录音仍在后台跑"的失同步
 - **托盘常驻 + 单实例**：Windows 命名互斥体防重复启动，配置可视化修改
 
 ## 安装使用
@@ -48,7 +48,7 @@ copy config.example.toml config.toml
 python main.py
 ```
 
-启动后最小化到托盘（麦克风图标），屏幕底部出现悬浮条。在任意输入框中：按住 F2 说话 → 松开 → 文字自动粘贴到光标处。
+启动后最小化到托盘（麦克风图标），屏幕底部出现悬浮条。在任意输入框中：按住 F2 说话 → 松开 → 文字自动粘贴到光标处（可在设置里改为切换模式：按一下开始、再按一下结束）。
 
 ## 获取 API Key
 
@@ -65,7 +65,7 @@ python main.py
 |---|---|---|
 | `[asr]` | `api_key` / `model` / `base_url` / `disfluency_removal` | 识别 Key、模型名、服务地址（留空=官方国内站，国际站填 `dashscope-intl.aliyuncs.com`）、服务端语气词过滤开关 |
 | `[llm]` | `base_url` / `api_key` / `model` / `temperature` / `timeout` | 深度润色的大模型 |
-| `[hotkey]` | `simple` / `deep` / `raw` / `cancel` | 热键绑定（keyboard 库键名，如 `f2`、`ctrl+space`） |
+| `[hotkey]` | `simple` / `deep` / `raw` / `cancel` / `mode` | 热键绑定（keyboard 库键名，如 `f2`、`ctrl+space`）；`mode` 为触发方式：`hold` 按住说话 / `toggle` 按一下开始再按一下结束 |
 | `[audio]` | `device` | 麦克风序号，`-1` 为系统默认；用 `python -m sounddevice` 查看设备列表 |
 | `[polish]` | `simple_llm_coherence` | 简单润色后追加 LLM 连贯性处理（默认关，保持瞬时） |
 | `[input]` | `streaming` | 实时上屏开关（关闭后恢复为松开热键后整段粘贴） |
@@ -92,7 +92,7 @@ main.py                  入口 + 总控（状态机：idle→starting→recordi
 app/
   config.py              TOML 配置读写（打包版数据目录迁移 %APPDATA%\VoiceVibe）
   recorder.py            sounddevice 16k PCM 采集
-  hotkey.py              全局热键（按住/松开，忽略按键重复）
+  hotkey.py              全局热键（按住/松开或单键切换，忽略按键重复）
   inject.py              剪贴板 + Ctrl+V 注入，延迟恢复原剪贴板
   history.py             JSONL 历史记录
   asr/

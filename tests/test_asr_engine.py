@@ -99,6 +99,27 @@ def test_error_propagates_on_stop():
     assert raised
 
 
+def test_error_stops_feeding_and_partial_salvages_text():
+    # 服务中断后：不再向死连接推流；已收文本可通过 partial() 抢救；
+    # stop() 直接抛错，绝不再对 SDK 调 stop（避免在死连接上挂死）
+    engine, rec, _ = _make_engine()
+    engine.start()
+    rec.emit("第一句。", True)
+    rec.emit("第二句中", False)
+    rec._callback.on_error(type("E", (), {"message": "connection closed"})())
+
+    engine.feed(b"after-error")
+    assert rec.sent == []  # 报错后 feed 静默丢弃
+    assert engine.partial() == "第一句。第二句中"
+    try:
+        engine.stop(timeout=0.1)
+        raised = False
+    except Exception:
+        raised = True
+    assert raised
+    assert not rec.stopped  # 死连接上不调用 SDK stop
+
+
 def test_apply_base_url_variants():
     import dashscope
 

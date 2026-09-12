@@ -1,11 +1,37 @@
 """把文本注入当前焦点应用：写剪贴板 → 模拟 Ctrl+V → 延迟恢复剪贴板。"""
 from __future__ import annotations
 
+import ctypes
 import threading
 import time
 
-import keyboard
 import pyperclip
+
+# 不用 keyboard.send() 注入按键：它会把 keyboard 库监听器的 is_replaying
+# 标志置真，期间用户按下的真实按键（包括"停止"热键 F2/F3/F4/Esc）会被
+# 当作回放事件直接丢弃 —— 表现为流式修正刚发生时按热键停止不了。
+# 这里用 keybd_event 直接发 VK，效果相同但不触碰该标志。
+_user32 = ctypes.windll.user32
+_KEYEVENTF_KEYUP = 0x0002
+
+# (虚拟键码, 扫描码)
+_KEY_CODES = {
+    "ctrl": (0x11, 0x1D),
+    "v": (0x56, 0x2F),
+    "backspace": (0x08, 0x0E),
+}
+_COMBO_KEYS = {"ctrl+v": ("ctrl", "v")}
+
+
+def send_keys(spec: str) -> None:
+    """发送组合键（如 "ctrl+v"）或单键（如 "backspace"），按下/抬起逆序交错。"""
+    keys = _COMBO_KEYS.get(spec, (spec,))
+    for name in keys:
+        vk, scan = _KEY_CODES[name]
+        _user32.keybd_event(vk, scan, 0, 0)
+    for name in reversed(keys):
+        vk, scan = _KEY_CODES[name]
+        _user32.keybd_event(vk, scan, _KEYEVENTF_KEYUP, 0)
 
 
 def inject_text(text: str, restore_delay: float = 1.2) -> None:
@@ -24,7 +50,7 @@ def inject_text(text: str, restore_delay: float = 1.2) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"写入剪贴板失败：{exc}") from exc
     time.sleep(0.08)  # 等剪贴板更新对系统可见
-    keyboard.send("ctrl+v")
+    send_keys("ctrl+v")
     if backup is not None and backup != text:
         threading.Timer(restore_delay, lambda: _safe_restore(backup)).start()
 
@@ -87,7 +113,7 @@ class LiveInjector:
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"写入剪贴板失败：{exc}") from exc
             time.sleep(0.08)  # 等剪贴板更新对系统可见
-            keyboard.send("ctrl+v")
+            send_keys("ctrl+v")
             self._pasted = True
         self._injected = text
 
@@ -95,7 +121,7 @@ class LiveInjector:
         if count <= 0:
             return
         for _ in range(count):
-            keyboard.send("backspace")
+            send_keys("backspace")
         time.sleep(0.03)  # 等编辑器处理完退格再粘补
 
     def cancel(self) -> None:

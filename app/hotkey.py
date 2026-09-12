@@ -1,9 +1,25 @@
-"""全局热键：keyboard 库，按住开始 / 松开结束，忽略系统按键自动重复。"""
+"""全局热键：keyboard 库全局钩子，按住开始 / 松开结束，忽略系统按键自动重复。
+
+不用 keyboard.on_press_key/on_release_key：二者对同一个 key 会各注册一次
+hook_key，而库内部 _hooks[key] 被后注册者覆盖，unhook_key(key) 只能摘掉
+release 钩子 —— press 钩子永久残留，重绑热键（改设置保存）后新旧 handler
+叠加，开始/停止逻辑错乱。keyboard.hook() 按回调精确解绑，无此问题。
+
+注入文字造成的按键风暴也不再吞事件：inject.py 已弃用 keyboard.send()
+（详见该文件说明）。这里仍保留一层自愈：若某次 keyup 事件丢失，后续
+keydown 会被误判为自动重复 —— 超过 _REPEAT_WINDOW_S 的 keydown 视为
+重新按下。
+"""
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional, Tuple
+import time
+from typing import Callable, Dict, Optional
 
 import keyboard
+
+# 判定为"按住不放的自动重复"的最大 keydown 间隔。Windows 重复延迟最长
+# 约 1 秒，物理松开后重新按下的间隔通常远大于此。
+_REPEAT_WINDOW_S = 1.5
 
 
 class HotkeyManager:
@@ -13,8 +29,8 @@ class HotkeyManager:
     """
 
     def __init__(self) -> None:
-        self._handlers: Dict[str, Tuple] = {}
-        self._down: set[str] = set()
+        self._removers: Dict[str, Callable[[], None]] = {}
+        self._down_at: Dict[str, float] = {}  # key → 最近一次 keydown 时刻
 
     def bind(
         self,
@@ -24,27 +40,30 @@ class HotkeyManager:
     ) -> None:
         key = key.strip().lower()
 
-        def press_handler(_event) -> None:
-            if key in self._down:  # 按住时系统会重复发送 keydown
+        def handler(event) -> None:
+            if event.name != key:
                 return
-            self._down.add(key)
-            if on_press:
-                on_press()
+            if event.event_type == keyboard.KEY_DOWN:
+                now = time.monotonic()
+                last = self._down_at.get(key)
+                is_repeat = last is not None and now - last < _REPEAT_WINDOW_S
+                self._down_at[key] = now  # 按住期间持续刷新，整段按住都视为重复
+                if is_repeat:
+                    return
+                if on_press:
+                    on_press()
+            else:
+                self._down_at.pop(key, None)
+                if on_release:
+                    on_release()
 
-        def release_handler(_event) -> None:
-            self._down.discard(key)
-            if on_release:
-                on_release()
-
-        keyboard.on_press_key(key, press_handler, suppress=False)
-        keyboard.on_release_key(key, release_handler, suppress=False)
-        self._handlers[key] = (press_handler, release_handler)
+        self._removers[key] = keyboard.hook(handler)
 
     def unbind_all(self) -> None:
-        for key in list(self._handlers):
+        for remove in self._removers.values():
             try:
-                keyboard.unhook_key(key)
+                remove()
             except (KeyError, ValueError):
                 pass
-        self._handlers.clear()
-        self._down.clear()
+        self._removers.clear()
+        self._down_at.clear()

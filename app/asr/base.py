@@ -41,6 +41,10 @@ class StreamingAsrEngine(ABC):
     def stop(self, timeout: float = 6.0) -> str:
         """结束识别，阻塞直到拿到完整文本或超时（超时返回已收到的部分）。"""
 
+    def partial(self) -> str:
+        """服务中断等异常时可抢救的已收文本快照（默认为空）。"""
+        return ""
+
     @abstractmethod
     def abort(self) -> None:
         """放弃本次识别，立即释放资源，不产生 final 回调。"""

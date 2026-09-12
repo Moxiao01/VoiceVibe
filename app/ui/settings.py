@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -65,6 +66,14 @@ class SettingsDialog(QDialog):
         self.coherence.setChecked(cfg.polish.simple_llm_coherence)
         form.addRow("", self.coherence)
 
+        self.hotkey_mode = QComboBox()
+        self.hotkey_mode.addItem("按住说话（按住开始，松开结束）", "hold")
+        self.hotkey_mode.addItem("切换模式（按一下开始，再按一下结束）", "toggle")
+        current = (cfg.hotkey.mode or "hold").strip().lower()
+        idx = self.hotkey_mode.findData(current)
+        self.hotkey_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        form.addRow("热键触发方式", self.hotkey_mode)
+
         hotkey_row = QHBoxLayout()
         self.hk = {}
         for mode in ("simple", "deep", "raw", "cancel"):
@@ -74,7 +83,7 @@ class SettingsDialog(QDialog):
             hotkey_row.addWidget(QPushButton(_MODE_NAMES.get(mode, mode) + "："), 0)
             hotkey_row.addWidget(edit)
         hotkey_row.addStretch(1)
-        form.addRow("热键（按住）", hotkey_row)
+        form.addRow("热键", hotkey_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -100,6 +109,7 @@ class SettingsDialog(QDialog):
         cfg.polish.simple_llm_coherence = self.coherence.isChecked()
         for mode, edit in self.hk.items():
             setattr(cfg.hotkey, mode, edit.text().strip().lower() or mode)
+        cfg.hotkey.mode = self.hotkey_mode.currentData() or "hold"
         save_config(cfg)
         self._on_saved(cfg)
         self.accept()

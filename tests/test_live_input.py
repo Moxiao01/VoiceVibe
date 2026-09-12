@@ -82,7 +82,9 @@ def live_env(monkeypatch):
     clip = _FakeClip()
     keys = _KeyLog(clip)
     monkeypatch.setattr(inject_mod, "pyperclip", clip)
-    monkeypatch.setattr(inject_mod.keyboard, "send", keys.send)
+    # inject.py 用模块级 send_keys() 直接 keybd_event 注入（不经 keyboard 库，
+    # 否则 is_replaying 会吞掉用户真实按键），测试替换成按键日志桩
+    monkeypatch.setattr(inject_mod, "send_keys", keys.send)
     monkeypatch.setattr(inject_mod.threading, "Timer", _NoopTimer)  # 测试中不真正恢复剪贴板
     return clip, keys
 

@@ -1,6 +1,7 @@
 """Voice Vibe 语音输入 —— 入口与总控。
 
-按住热键说话 → 松开后润色 → 自动粘贴到当前光标处。
+默认按住热键说话 → 松开后润色 → 自动粘贴到当前光标处；
+热键触发方式可在设置中改为切换模式（按一下开始，再按一下结束）。
   F2 简单润色（规则去语气词，瞬时）
   F3 深度润色（LLM 把口述重写为 AI 提示词）
   F4 原始转写
@@ -53,6 +54,7 @@ class Controller(QObject):
         self._state = "idle"  # idle / starting / recording / finalizing
         self._state_since = time.monotonic()
         self._pending_release = False
+        self._active_mode: str | None = None  # 开启当前会话的热键模式（starting 期 session 还没建立）
         self._session = None
 
         self._sig_partial.connect(overlay.set_partial)
@@ -63,19 +65,46 @@ class Controller(QObject):
     # ---- 热键注册 ----
     def register_hotkeys(self) -> None:
         self.hotkeys.unbind_all()
+        toggle = self.cfg.hotkey.mode.strip().lower() == "toggle"
         for mode, attr in (("simple", "simple"), ("deep", "deep"), ("raw", "raw")):
             key = getattr(self.cfg.hotkey, attr)
-            self.hotkeys.bind(
-                key,
-                on_press=lambda m=mode: self._press(m),
-                on_release=lambda m=mode: self._release(m),
-            )
+            if toggle:
+                self.hotkeys.bind(key, on_press=lambda m=mode: self._toggle(m))
+            else:
+                self.hotkeys.bind(
+                    key,
+                    on_press=lambda m=mode: self._press(m),
+                    on_release=lambda m=mode: self._release(m),
+                )
         self.hotkeys.bind(self.cfg.hotkey.cancel, on_press=self._cancel)
-        self.overlay.set_hint(
-            f"按住 {self.cfg.hotkey.simple.upper()} 说话 · "
-            f"{self.cfg.hotkey.deep.upper()} 深度润色 · "
-            f"{self.cfg.hotkey.raw.upper()} 原文 · Esc 取消"
+        self.overlay.set_hint(self._hint_text(toggle))
+
+    def _hint_text(self, toggle: bool) -> str:
+        c = self.cfg.hotkey
+        start = f"按 {c.simple.upper()} 开始/停止" if toggle else f"按住 {c.simple.upper()} 说话"
+        return (
+            f"{start} · "
+            f"{c.deep.upper()} 深度润色 · "
+            f"{c.raw.upper()} 原文 · Esc 取消"
         )
+
+    def _toggle(self, mode: str) -> None:
+        """切换模式：按一下开始，再按一下结束；按住不放只触发一次（keyboard 自动重复被过滤）。
+
+        会话进行中（含连接建立期）其他热键完全禁用：只有开启本次会话的键能
+        结束它，Esc 取消不受限。
+        """
+        with self._lock:
+            if self._state in ("starting", "recording"):
+                if self._active_mode is not None and mode != self._active_mode:
+                    return
+                active = True
+            else:
+                active = False
+        if active:
+            self._release(mode)
+        else:
+            self._press(mode)
 
     # ---- 会话状态机 ----
     def _press(self, mode: str) -> None:
@@ -91,6 +120,7 @@ class Controller(QObject):
             self._state = "starting"
             self._state_since = time.monotonic()
             self._pending_release = False
+            self._active_mode = mode
         threading.Thread(target=self._start_worker, args=(mode,), daemon=True).start()
 
     def _reset_stuck_locked(self) -> bool:
@@ -104,6 +134,7 @@ class Controller(QObject):
         self._state = "idle"
         self._state_since = time.monotonic()
         self._pending_release = False
+        self._active_mode = None
         if session is not None:
             threading.Thread(target=self._abort_session, args=(session,), daemon=True).start()
         return True
@@ -131,7 +162,7 @@ class Controller(QObject):
                 base_url=self.cfg.asr.base_url,
                 callbacks=AsrCallbacks(
                     on_partial=lambda t: self._on_partial(session, mode, t),
-                    on_error=lambda msg: self._sig_toast.emit(f"识别服务：{msg}"),
+                    on_error=lambda msg: self._on_engine_error(session, msg),
                 ),
             )
             engine.start()
@@ -151,6 +182,7 @@ class Controller(QObject):
             if error is not None:
                 self._state = "idle"
                 self._state_since = time.monotonic()
+                self._active_mode = None
                 self._sig_toast.emit(f"启动失败：{error}")
                 self._abort_session(session)
                 return
@@ -178,6 +210,43 @@ class Controller(QObject):
             pass
         q.put_nowait(shown)
 
+    def _on_engine_error(self, session: dict, msg: str) -> None:
+        """识别服务中断（网络/音频线程回调）。
+
+        只弹提示会把状态机留在 recording、麦克风继续采集，而悬浮条的错误提示
+        几秒后自动回到初始样式 —— 界面与实际状态失同步（曾表现为"看起来回到
+        初始界面但录音还在跑，切换/按住模式全部失灵"）。因此报错等同松手：
+        立即停麦并走收尾流程，抢救已识别的部分文本。
+        """
+        with self._lock:
+            first = not session.get("engine_error")
+            session["engine_error"] = True
+            if self._state == "idle":
+                return  # 已取消/已收尾：不影响状态机，仅提示
+            if self._state == "starting":
+                # starting 期 _session 尚未登记，此报错必属于正在建立的会话
+                self._pending_release = True  # 连接建立完成后立即收尾
+                finish = False
+            elif self._state == "recording" and self._session is session:
+                self._state = "finalizing"
+                self._state_since = time.monotonic()
+                finish = True
+            else:  # finalizing 等状态：收尾已在进行
+                finish = False
+        if finish:
+            self._sig_state.emit(OverlayState.PROCESSING, f"识别服务中断：{msg}", 0)
+            # recorder.stop() 不在音频回调线程里直接调，统一丢到工作线程
+            threading.Thread(target=self._finish_errored, args=(session,), daemon=True).start()
+        elif first:
+            self._sig_toast.emit(f"识别服务：{msg}")
+
+    def _finish_errored(self, session: dict) -> None:
+        try:
+            session["recorder"].stop()
+        except Exception:
+            pass
+        self._finalize(session)
+
     def _pump_injector(self, session: dict) -> None:
         inj = session["injector"]
         q = session["q"]
@@ -196,6 +265,9 @@ class Controller(QObject):
     def _release(self, mode: str) -> None:
         with self._lock:
             if self._state == "starting":
+                # 会话进行中：其他热键的松开不得劫持（否则误触的键会把会话标记成"连上就停"）
+                if self._active_mode is not None and mode != self._active_mode:
+                    return
                 self._pending_release = True
                 return
             if self._state != "recording" or not self._session:
@@ -209,6 +281,7 @@ class Controller(QObject):
                 self._state = "idle"
                 self._state_since = time.monotonic()
                 self._session = None
+                self._active_mode = None
                 self._sig_toast.emit("说话时间太短，已忽略")
                 return
             self._state = "finalizing"
@@ -221,11 +294,16 @@ class Controller(QObject):
     def _finalize(self, session: dict) -> None:
         mode = session["mode"]
         engine = session["engine"]
+        salvaged = False
         try:
             raw = engine.stop(timeout=4.0)
         except Exception as exc:  # noqa: BLE001
-            raw = None
-            self._sig_toast.emit(f"识别失败：{exc}")
+            if session.get("engine_error"):
+                raw = engine.partial()  # 识别服务中断：抢救已定稿/中间的部分文本
+                salvaged = True
+            else:
+                raw = None
+                self._sig_toast.emit(f"识别失败：{exc}")
         session["recorder"].stop()
         if raw is None:
             self._end_session(session)
@@ -243,6 +321,8 @@ class Controller(QObject):
                 self._sig_state.emit(OverlayState.PROCESSING, "连贯润色中…", 0)
 
             final, note = self._polish(raw, mode)
+            if salvaged:
+                note = note or "识别服务中断，已上屏中断前识别到的内容"
             if not final:
                 self._sig_toast.emit("润色后无有效内容")
                 return
@@ -297,6 +377,19 @@ class Controller(QObject):
             return coherence_polish(raw, self.cfg), ""
         return simple_polish(raw), ""
 
+    def _stop_requested(self) -> None:
+        """悬浮条 ■ 按钮：结束本次输入并保留已说内容（区别于 Esc 的取消丢弃）。
+
+        之前按钮直接走取消：热键被吞时它是唯一能停的方式，一点就退格删光
+        全部已上屏文字，等于白说。现在录音中点它等同松开热键，正常润色上屏。
+        """
+        with self._lock:
+            mode = self._session["mode"] if self._state == "recording" and self._session else None
+        if mode is not None:
+            self._release(mode)
+        else:
+            self._cancel()  # 连接建立期尚无已上屏文字，仍走取消
+
     def _cancel(self) -> None:
         with self._lock:
             if self._state in ("idle", "finalizing"):
@@ -306,6 +399,7 @@ class Controller(QObject):
             self._state_since = time.monotonic()
             self._session = None
             self._pending_release = False
+            self._active_mode = None
         if session is not None:
             self._abort_session(session)
         # 直接回到初始样式，不弹 ERROR 样式提示
@@ -322,6 +416,7 @@ class Controller(QObject):
             self._state = "idle"
             self._state_since = time.monotonic()
             self._session = None
+            self._active_mode = None
 
     def shutdown(self) -> None:
         """应用退出前：中止进行中的识别会话，释放音频与 WebSocket。"""
@@ -330,6 +425,7 @@ class Controller(QObject):
             self._session = None
             self._state = "idle"
             self._state_since = time.monotonic()
+            self._active_mode = None
         if session is not None:
             self._abort_session(session)
 
@@ -393,7 +489,7 @@ def main() -> int:
 
     overlay = Overlay()
     controller = Controller(cfg, overlay)
-    overlay.stopClicked.connect(controller._cancel)
+    overlay.stopClicked.connect(controller._stop_requested)
 
     def place_overlay() -> None:
         if cfg.ui.x >= 0 and cfg.ui.y >= 0:

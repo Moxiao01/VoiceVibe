@@ -114,14 +114,18 @@ class DashScopeRealtimeAsr(StreamingAsrEngine):
 
     def stop(self, timeout: float = 6.0) -> str:
         self._stopping = True
-        try:
-            self._rec.stop()
-        except Exception as exc:
-            if self._error is None:
-                self._error = f"结束识别失败：{exc}"
+        if self._error is None:  # 连接已报错/死亡时不再对 SDK 调 stop，避免在死连接上挂死
+            try:
+                self._rec.stop()
+            except Exception as exc:
+                if self._error is None:
+                    self._error = f"结束识别失败：{exc}"
         self._closed.wait(timeout)
         if self._error:
             raise StreamingAsrError(self._error)
+        return (self._committed + self._current).strip()
+
+    def partial(self) -> str:
         return (self._committed + self._current).strip()
 
     def abort(self) -> None:
@@ -162,6 +166,7 @@ class DashScopeRealtimeAsr(StreamingAsrEngine):
     def _on_error(self, error) -> None:
         message = getattr(error, "message", None) or getattr(error, "code", None) or str(error)
         self._error = message
+        self._started = False  # 连接已死：让 feed() 立即停推，避免反复发送失败
         self._closed.set()
         if self.callbacks.on_error:
             self.callbacks.on_error(message)
