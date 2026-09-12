@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import os
 import queue
 import sys
@@ -15,7 +16,7 @@ import threading
 import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.asr.base import AsrCallbacks
 from app.asr.dashscope_rt import DashScopeRealtimeAsr
@@ -372,7 +373,20 @@ def _make_recorder(cfg: Config, engine, sig_level, sig_toast):
     )
 
 
+def _already_running() -> bool:
+    """Windows 命名互斥体防重复启动：热键会双触发，托盘也会出现两个。进程退出自动释放。"""
+    try:
+        ctypes.windll.kernel32.CreateMutexW(None, False, "VoiceVibe.SingleInstance")
+        return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    except Exception:
+        return False
+
+
 def main() -> int:
+    if _already_running():
+        app = QApplication(sys.argv)
+        QMessageBox.information(None, "Voice Vibe", "Voice Vibe 已在运行（右下角托盘的麦克风图标）。")
+        return 0
     cfg = load_config()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)

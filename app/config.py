@@ -2,12 +2,25 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tomllib
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.toml"
+
+
+def _data_dir() -> Path:
+    """数据目录：开发时用项目根目录；打包安装后安装目录不可写，改用 %APPDATA%\\VoiceVibe。"""
+    if getattr(sys, "frozen", False):
+        base = Path(os.environ.get("APPDATA") or Path.home()) / "VoiceVibe"
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    return PROJECT_ROOT
+
+
+CONFIG_PATH = _data_dir() / "config.toml"
 
 
 @dataclass
@@ -95,7 +108,19 @@ def _merge(cls, data: dict):
     return cls(**kwargs)
 
 
+def _ensure_frozen_config() -> None:
+    """打包版首次运行：把随包的 config.example.toml 复制为用户配置，便于直接编辑填 Key。"""
+    if not getattr(sys, "frozen", False) or CONFIG_PATH.exists():
+        return
+    bundled = Path(getattr(sys, "_MEIPASS", "")) / "config.example.toml"
+    try:
+        CONFIG_PATH.write_bytes(bundled.read_bytes())
+    except OSError:
+        pass  # 读不出示例就先用默认值，托盘"设置"里也能配
+
+
 def load_config() -> Config:
+    _ensure_frozen_config()
     cfg = Config()
     if not CONFIG_PATH.exists():
         return cfg

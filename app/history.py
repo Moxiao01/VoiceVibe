@@ -6,8 +6,10 @@ import threading
 import time
 from pathlib import Path
 
+from app.config import _data_dir
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HISTORY_PATH = PROJECT_ROOT / "history.jsonl"
+HISTORY_PATH = _data_dir() / "history.jsonl"
 
 _lock = threading.Lock()
 
