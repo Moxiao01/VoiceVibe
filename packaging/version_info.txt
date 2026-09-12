@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct("CompanyName", "Voice Vibe"),
             StringStruct("FileDescription", "Voice Vibe 语音输入"),
-            StringStruct("FileVersion", "0.1.0.0"),
+            StringStruct("FileVersion", "0.2.0.0"),
             StringStruct("InternalName", "VoiceVibe"),
             StringStruct("LegalCopyright", "MIT License"),
             StringStruct("OriginalFilename", "VoiceVibe.exe"),
             StringStruct("ProductName", "Voice Vibe 语音输入"),
-            StringStruct("ProductVersion", "0.1.0.0"),
+            StringStruct("ProductVersion", "0.2.0.0"),
           ],
         )
       ]
