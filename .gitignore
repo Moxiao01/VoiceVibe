@@ -6,3 +6,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 smoke_output.log
+
+# 打包构建产物
+build/
+dist/
+
+# 本地工具与虚拟环境
+.zcode/
+.venv/
+venv/
