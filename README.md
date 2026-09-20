@@ -26,7 +26,7 @@ Windows 桌面语音输入工具，参考 [OpenLess](https://github.com/Open-Les
 从 [Releases](https://github.com/Moxiao01/VoiceVibe/releases) 下载 `VoiceVibe-Setup-x.y.z.exe` 双击安装。
 
 - 首次运行会在 `%APPDATA%\VoiceVibe` 生成 `config.toml`，通过托盘「设置」或直接编辑该文件填入 API Key（见下文[获取 API Key](#获取-api-key)）
-- 开机自启可将 `VoiceVibe.exe` 的快捷方式放入 `shell:startup`
+- 开机自启可直接在托盘「设置」中勾选「开机启动」，无需手动创建快捷方式
 
 ### 方式二：源码运行（Python 3.12+）
 

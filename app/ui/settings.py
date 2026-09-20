@@ -15,10 +15,12 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
+    QMessageBox,
 )
 
 from ..config import Config, save_config
 from ..history import load_records
+from ..startup import is_startup_enabled, set_startup_enabled
 
 _MODE_NAMES = {"simple": "简单润色", "deep": "深度润色", "raw": "原始转写"}
 
@@ -66,6 +68,14 @@ class SettingsDialog(QDialog):
         self.coherence.setChecked(cfg.polish.simple_llm_coherence)
         form.addRow("", self.coherence)
 
+        self.startup = QCheckBox("登录 Windows 后自动启动并驻留托盘")
+        try:
+            self.startup.setChecked(is_startup_enabled())
+        except OSError:
+            self.startup.setChecked(False)
+            self.startup.setToolTip("无法读取 Windows 自启动设置")
+        form.addRow("开机启动", self.startup)
+
         self.hotkey_mode = QComboBox()
         self.hotkey_mode.addItem("按住说话（按住开始，松开结束）", "hold")
         self.hotkey_mode.addItem("切换模式（按一下开始，再按一下结束）", "toggle")
@@ -110,7 +120,12 @@ class SettingsDialog(QDialog):
         for mode, edit in self.hk.items():
             setattr(cfg.hotkey, mode, edit.text().strip().lower() or mode)
         cfg.hotkey.mode = self.hotkey_mode.currentData() or "hold"
-        save_config(cfg)
+        try:
+            set_startup_enabled(self.startup.isChecked())
+            save_config(cfg)
+        except OSError as exc:
+            QMessageBox.critical(self, "保存失败", f"无法更新开机自启动设置：{exc}")
+            return
         self._on_saved(cfg)
         self.accept()
 

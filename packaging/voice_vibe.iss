@@ -4,7 +4,7 @@
 
 #define MyAppName "Voice Vibe"
 #define MyAppNameZh "Voice Vibe 语音输入"
-#define MyAppVersion "0.2.1"
+#define MyAppVersion "0.2.2"
 #define MyAppExeName "VoiceVibe.exe"
 
 [Setup]
@@ -62,6 +62,8 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usUninstall then
+  if CurUninstallStep = usUninstall then begin
     KillRunningInstance;
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'VoiceVibe');
+  end;
 end;
