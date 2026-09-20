@@ -148,7 +148,41 @@ def test_short_tap_aborts_and_returns_to_idle(app):
     controller._release("simple")
 
     assert controller._state == "idle"
+    deadline = time.time() + 2
+    while ("stop" not in recorder.calls or "abort" not in engine.calls) and time.time() < deadline:
+        time.sleep(0.02)
     assert "stop" in recorder.calls and "abort" in engine.calls
+    ov.hide()
+
+
+def test_short_tap_abort_callback_does_not_deadlock(app):
+    # DashScope 的 stop/abort 可能同步触发 on_error。清理若仍持有状态锁，
+    # 回调再次获取该锁时会把 keyboard 监听线程和应用一起卡死。
+    ov, controller = _make(app)
+    recorder = _StubRecorder()
+    callback_returned = threading.Event()
+
+    class _CallbackEngine(_StubEngine):
+        def abort(self):
+            self.calls.append("abort")
+            controller._on_engine_error(controller._session_for_callback, "aborted")
+            callback_returned.set()
+
+    engine = _CallbackEngine()
+    session = _session(recorder, engine, started_ago=0.05)
+    controller._session_for_callback = session
+    controller._state = "recording"
+    controller._session = session
+
+    released = threading.Event()
+    caller = threading.Thread(target=lambda: (controller._release("simple"), released.set()))
+    caller.start()
+    caller.join(timeout=1.0)
+
+    assert released.is_set()
+    assert controller._state == "idle"
+    assert callback_returned.wait(1.0)
+    assert "abort" in engine.calls
     ov.hide()
 
 

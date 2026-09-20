@@ -4,7 +4,7 @@
 
 #define MyAppName "Voice Vibe"
 #define MyAppNameZh "Voice Vibe 语音输入"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.2.1"
 #define MyAppExeName "VoiceVibe.exe"
 
 [Setup]

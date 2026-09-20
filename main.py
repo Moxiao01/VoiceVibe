@@ -263,6 +263,7 @@ class Controller(QObject):
                 self._sig_toast.emit(f"实时上屏中断，将在松开后整体写入：{exc}")
 
     def _release(self, mode: str) -> None:
+        short_session = None
         with self._lock:
             if self._state == "starting":
                 # 会话进行中：其他热键的松开不得劫持（否则误触的键会把会话标记成"连上就停"）
@@ -277,15 +278,20 @@ class Controller(QObject):
                 return
             duration = time.monotonic() - session["start"]
             if duration < MIN_DURATION_S:
-                self._abort_session(session)
                 self._state = "idle"
                 self._state_since = time.monotonic()
                 self._session = None
                 self._active_mode = None
-                self._sig_toast.emit("说话时间太短，已忽略")
-                return
-            self._state = "finalizing"
-            self._state_since = time.monotonic()
+                short_session = session
+            else:
+                self._state = "finalizing"
+                self._state_since = time.monotonic()
+        if short_session is not None:
+            # SDK 的 abort 可能同步触发错误回调；必须在释放状态锁后异步清理，
+            # 否则短按热键会让回调与当前线程互相等待，表现为整个程序卡死。
+            threading.Thread(target=self._abort_session, args=(short_session,), daemon=True).start()
+            self._sig_toast.emit("说话时间太短，已忽略")
+            return
         # 松手 = 立即停麦并离开"正在聆听"；识别收尾在后台进行
         session["recorder"].stop()
         self._sig_state.emit(OverlayState.PROCESSING, "转写中…", 0)
